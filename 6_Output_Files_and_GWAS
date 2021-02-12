@@ -1,0 +1,97 @@
+## In R ##
+# Generate list of passed SNPs for GWAS
+setwd("/Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC")
+files = dir()[grep(".info", dir())]
+
+require(data.table)
+info = list()
+for(file in files){
+	info[[gsub(".info", "", file)]] = fread(file)
+}
+
+info = lapply(info, as.data.frame)
+info = do.call("rbind", info)
+
+# Imputation >=0.6
+info1 = info[which(info$Rsq >=0.6),]
+
+# MAF <0.001
+info2 = info1[which(info1$MAF>0.005 & info1$MAF<0.995),]
+
+write.table(info2$SNP, file="SNPList.txt", row.names=F, col.names=F, quote=F)
+
+
+#### Generate new ID file with vcf formatting
+plink2 --allow-no-sex --double-id --glm allow-no-covars --out ../../../GWAS_Runs/HRC/test --pheno ../../../GWAS_Runs/HRC/ABeta_EPAD.ped --vcf chr${chr}.dose.vcf --extract ./SNPList.txt
+
+# In R #
+keep = read.table("../../EPAD.GWAS.valid", header=T)
+test = read.table("/Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC/test.fam")
+test$ID = sub(".*?_","",x)
+test = test[which(test$ID %in% keep$V2),]
+write.table(test[,1:2], file="gwas_keep.txt", quote=F, sep=' ', row.names=F, col.names=F)
+
+
+# Run GWAS
+cd /Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC
+for chr in {1..22}
+do
+plink2 --allow-no-sex --double-id --glm allow-no-covars --out ../../../GWAS_Runs/HRC/chr${chr}_ABeta --pheno ../../../GWAS_Runs/HRC/ABeta_EPAD.ped --vcf chr${chr}.dose.vcf --extract ./SNPList.txt --keep gwas_keep.txt
+done
+
+cd /Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC
+for chr in {1..22}
+do
+plink2 --allow-no-sex --double-id --glm allow-no-covars --out ../../../GWAS_Runs/HRC/chr${chr}_TTau --pheno ../../../GWAS_Runs/HRC/TTau_EPAD.ped --vcf chr${chr}.dose.vcf --extract ./SNPList.txt --keep gwas_keep.txt
+done
+
+
+cd /Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC
+for chr in {1..22}
+do
+plink2 --allow-no-sex --double-id --glm allow-no-covars --out ../../../GWAS_Runs/HRC/chr${chr}_PTau --pheno ../../../GWAS_Runs/HRC/PTau_EPAD.ped --vcf chr${chr}.dose.vcf --extract ./SNPList.txt --keep gwas_keep.txt
+done
+
+
+cd /Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC
+for chr in {1..22}
+do
+plink2 --allow-no-sex --double-id --glm allow-no-covars --out ../../../GWAS_Runs/HRC/chr${chr}_Ratio --pheno ../../../GWAS_Runs/HRC/Ratio_EPAD.ped --vcf chr${chr}.dose.vcf --extract ./SNPList.txt --keep gwas_keep.txt
+done
+
+
+# Generate table of allele freqs
+cd /Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC
+for chr in {1..22}
+do
+plink2 --geno-counts --double-id --out ./freqs/chr${chr}_freqs --vcf chr${chr}.dose.vcf --extract ./SNPList.txt --keep ./gwas_keep.txt &
+done
+
+
+## In R ##
+# Merge Freqs
+setwd("/Cluster_Filespace/Marioni_Group/EPAD_GWAS/PLINK_COMBINED/imputation/HRC/freqs")
+files = dir()[grep("_freqs.gcount", dir())]
+
+require(data.table)
+info = list()
+for(file in files){
+	info[[gsub("_freqs.gcount", "", file)]] = fread(file)
+}
+
+info = lapply(info, as.data.frame)
+info = do.call("rbind", info)
+
+map_ea1 = as.data.frame(fread("/Cluster_Filespace/Marioni_Group/Daniel/GWAS_AgeAccel/HRC_1000G_maps/HRC.r1-1.GRCh37.wgs.mac5.sites.tab.rsid_map", sep='\t', header=T, stringsAsFactors=FALSE))
+map_ea2 = as.data.frame(fread("/Cluster_Filespace/Marioni_Group/Daniel/GWAS_AgeAccel/HRC_1000G_maps/1000GP_p3v5_legends_rbind.noDup.noMono.noCnv.noCnAll.afref.EUR.txt", sep='\t', header=T, stringsAsFactors=FALSE))
+
+info$cptid = gsub(":[A-Z]:[A-Z]", "", info$ID)
+map_ea1$cptid = paste0(map_ea1$chr, ":", map_ea1$pos)
+info$rsid = map_ea1[match(info$cptid, map_ea1$cptid), "rsid"]
+
+info$CHR = gsub(":.*", "", info$cptid)
+info$POS = gsub("?.*:", "", info$cptid)
+
+freqs = info[,c("rsid", "CHR", "POS", "REF", "ALT", "HOM_REF_CT", "HET_REF_ALT_CTS", "TWO_ALT_GENO_CTS")]
+names(freqs) = c("SNP", "CHR", "POS", "REF", "ALT", "HOM_REF", "HET", "HOM_ALT")
+freqs$ALT_FREQ = (freqs$HOM_ALT * 2 + freqs$HET)/(rowSums(freqs[,c("HOM_REF", "HET", "HOM_ALT")])*2)
